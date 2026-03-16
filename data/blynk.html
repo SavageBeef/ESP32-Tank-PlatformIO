@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="bootstrap.min.css" rel="stylesheet">
+    <title>Tank Blynk Setup</title>
+</head>
+<body class="bg-light">
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-6 col-lg-4">
+                <div class="card shadow border-0">
+                    <div class="card-header bg-dark text-white text-center py-3">
+                        <h3 class="mb-0">Tank Blynk Configuration</h3>
+                    </div>
+                    <div class="card-body p-4">
+                        <form action="/save" method="POST">
+                            <div class="mb-3">
+                                <label class="form-label text-muted small fw-bold">SERVER (IP:PORT)</label>
+                                <input type="text" name="server" class="form-control" value="%CURRENT_SERVER%" required>
+                            </div>
+                            <div class="mb-4">
+                                <label class="form-label text-muted small fw-bold">AUTH TOKEN</label>
+                                <input type="text" name="auth" class="form-control" value="%CURRENT_AUTH%" required>
+                            </div>
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-dark btn-lg">Save & Restart</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                <p class="text-center text-muted mt-3 small">Device: %AP_NAME%</p>
+                <div id="error-alert" class="alert alert-danger d-none" role="alert">
+                    <strong>Invalid Format!</strong> Please use the IP:PORT format (e.g., 192.168.1.50:8080).
+                </div>
+                <script>
+                    // If the URL has ?error=1, show the alert
+                    const urlParams = new URLSearchParams(window.location.search);
+                    if (urlParams.has('error')) {
+                        document.getElementById('error-alert').classList.remove('d-none');
+                    }
+                </script>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
