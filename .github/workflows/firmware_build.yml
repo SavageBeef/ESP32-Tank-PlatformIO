@@ -1,0 +1,38 @@
+name: Firmware Build
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  esp32_build:
+    name: ESP32 Build (NodeMCU-32S)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache Pip/PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+          key: ${{ runner.os }}-pio-build-${{ hashFiles('**/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Create Dummy Secrets
+        # Since ESP32_secrets.h is gitignored, we use the example to pass compilation
+        run: cp include/ESP32_secrets_example.h include/ESP32_secrets.h
+
+      - name: Run Build
+        run: pio run -e nodemcu-32s

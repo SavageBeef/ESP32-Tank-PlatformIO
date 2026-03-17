@@ -1,6 +1,7 @@
 # ESP32-Tank: Modular, Network-Controlled DIY Tank
 
-![PlatformIO CI](https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/main.yml/badge.svg)
+![Tests](https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/unit_tests.yml/badge.svg)
+![Build](https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/firmware_build.yml/badge.svg)
 
 An advanced implementation of the [ESP32-Tank](https://github.com/SavageBeef/ESP32-Tank) project, refactored into a **test-driven, modular C++ architecture** using the **PlatformIO** ecosystem.
 
