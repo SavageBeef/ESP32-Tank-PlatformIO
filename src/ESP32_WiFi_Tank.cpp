@@ -33,36 +33,12 @@
 #include <Arduino.h>
 #include "TankDrive.h" //Tank Core Logic
 #include "BatteryMath.h"
+#include "NetworkHelper.h" // WIFI, OTA, WebSerial, Captive Portals
 
 /* Comment this out to disable prints and save space */
 #define BLYNK_PRINT Serial
 
-/* Fill-in your Template ID (only if using Blynk.Cloud) */
-//#define BLYNK_TEMPLATE_ID   "YourTemplateID"
-
-#include <WiFi.h>
-#include <WiFiClient.h>
-
-// Include WebServer FIRST to prevent conflicts
-#include <WebServer.h>
-
 #include <BlynkSimpleEsp32.h>
-
-//Arduino OTA
-#include <ESPmDNS.h>
-#include <WiFiUdp.h>
-#include <ArduinoOTA.h>
-
-// WiFiManager - include after WebServer
-#include <WiFiManager.h> // WiFi Configuration Captive Portal
-
-//webSerialMonitor - include after WiFiManager
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <WebSerial.h>
-
-// Secrets
-#include "ESP32_secrets.h"
 
 // Add printf functionality to WebSerial
 #include "WebSerial_printf.h"
@@ -70,38 +46,7 @@
 // Dual Printf to Serial Monitor and WebSerial Monitor
 #include "dual_printf.h"
 
-#include <Preferences.h> // Native ESP32 library for saving data to flash memory.
-
-#include <LittleFS.h> // Stores to web files for the Blynk Provisioner.
-
-Preferences preferences;
-WiFiManager wm;
-
-// Blynk credentials variables
-char blynk_auth[34] = Secret_AUTH;
-char blynk_server[40] = Secret_IP; 
-char blynk_port[6]  = Secret_PORT;
-
-// Blynk connection tracking
-int blynk_connection_attempts = 0;
-const int BLYNK_MAX_ATTEMPTS = 5;
-bool has_provisioned_blynk = false;
-
-AsyncWebServer server(80);
 int LED = 2;
-
-// Blynk Provisioner softAP settings
-const char* softAPName = "Tank-Blynk-Setup";
-const char* softAPPass = "password123";
-
-// You should get Auth Token in the Blynk App.
-// Go to the Project Settings (nut icon).
-char auth[] = Secret_AUTH;
-
-// Your WiFi credentials.
-// Set password to "" for open networks.
-char ssid[] = Secret_SSID; 
-char pass[] = Secret_PASS;
 
 // Motor 1 (Left)
 #define motorL_Negative 22
@@ -193,26 +138,11 @@ void dualPrintln(T data) {
   WebSerial.println(data);
 }
 
-// This function swaps placeholders in the HTML with real data
-String processor(const String& var) {
-  if (var == "CURRENT_SERVER") {
-    return String(blynk_server) + ":" + String(blynk_port);
-  }
-  if (var == "CURRENT_AUTH") {
-    return String(blynk_auth);
-  }
-  if (var == "AP_NAME") {
-    return String(softAPName); 
-  }
-  return String();
-}
+// Class Instantiation
+NetworkHelper network;
 
 // Declare functions
 void applyToMotors(TankCommand cmd);
-void WebSerial_Setup();
-void OTA_Setup();
-void launchCombinedProvisioner();
-void launchBlynkProvisioner();
 
 void setup()
 {
@@ -224,69 +154,14 @@ void setup()
   Serial.println("\n\n=== TANK BOOTING ===");
   Serial.println("Initializing systems...");
 
-  LittleFS.begin();
-
-  // --- 1. Load Custom Params (Blynk) from Flash ---
-  Serial.println("Loading preferences...");
-  preferences.begin("tank_config", false);
-  String savedAuth = preferences.getString("auth", ""); 
-  String savedServer = preferences.getString("server", "");
-  String savedPort = preferences.getString("port", "");
-  
-  // Use saved values if available, otherwise use Secret defaults
-  if (savedAuth != "") savedAuth.toCharArray(blynk_auth, 34);
-  if (savedServer != "") savedServer.toCharArray(blynk_server, 40);
-  if (savedPort != "") savedPort.toCharArray(blynk_port, 6);
-  
-  Serial.printf("Loaded Blynk Server: %s:%s\n", blynk_server, blynk_port);
-  Serial.printf("Loaded Blynk Auth: %.4s...\n", blynk_auth);
-  
-  preferences.end();
-  
-  // --- 2. WiFi CONNECTION ATTEMPTS ---
-  Serial.println("\n--- WiFi Connection Phase ---");
-  Serial.println("Attempting to connect to saved Wi-Fi...");
-  
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(); 
-
-  int wifi_attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && wifi_attempts < 5) {
-    delay(12000);
-    Serial.print(".");
-    wifi_attempts++;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    // WiFi FAILED: Launch combined provisioner for WiFi + Blynk credentials
-    Serial.println("\nWiFi connection failed. Launching provisioner for WiFi and Blynk configuration...");
-    launchCombinedProvisioner();
-    
-    if (!WiFi.isConnected()) {
-      Serial.println("WiFi provisioning failed. Restarting...");
-      delay(3000);
-      ESP.restart();
-    }
-  }
-  
-  Serial.println("\nWiFi connected!");
-  Serial.println("IP: " + WiFi.localIP().toString());
-
-  // --- 3. NOW SETUP OTA AND WEBSERIAL (after WiFi is established) ---
-  Serial.println("\n--- Initializing Services ---");
-  Serial.println("Setting up Arduino OTA...");
-  OTA_Setup();
-  
-  Serial.println("Setting up WebSerial...");
-  WebSerial_Setup();
-  Serial.println("WebSerial ready");
+  network.begin("SavageTank", "password123"); // Manages WIFI, Captive Portals, Web Serial setup and Arduino OTA setup
 
   // --- 4. ATTEMPT BLYNK CONNECTION ---
   Serial.println("\n--- Blynk Connection Phase ---");
-  
+
   // Convert port char array to integer for the function
   int port_int = atoi(blynk_port);
-  
+
   Serial.print("Attempting Blynk Server: ");
   Serial.print(blynk_server);
   Serial.print(":");
@@ -294,7 +169,7 @@ void setup()
 
   // IP and Port of Blynk Server.
   Blynk.config(blynk_auth, blynk_server, port_int);
-  
+
   // Try to connect to Blynk server
   int blynk_startup_attempts = 0;
   while (!Blynk.connected() && blynk_startup_attempts < 5) {
@@ -302,29 +177,29 @@ void setup()
     Blynk.connect(4000); // 4 second timeout per attempt
     blynk_startup_attempts++;
   }
-  
+
   if (!Blynk.connected()) {
     Serial.println("\nBlynk server connection failed. Launching Blynk Provisioner...");
-    launchBlynkProvisioner();
-    
+    network.launchBlynkProvisioner();
+
     // Try to reconnect with new credentials
     port_int = atoi(blynk_port);
     Blynk.config(blynk_auth, blynk_server, port_int);
-    
+
     blynk_startup_attempts = 0;
     while (!Blynk.connected() && blynk_startup_attempts < 5) {
       Serial.print(".");
       Blynk.connect(4000);
       blynk_startup_attempts++;
     }
-    
+
     if (!Blynk.connected()) {
       Serial.println("\nBlynk provisioning failed. Restarting...");
       delay(3000);
       ESP.restart();
-    }
+    } 
   }
-  
+
   Serial.println("\nBlynk connected successfully!");
 
   pinMode(2, OUTPUT);
@@ -371,26 +246,22 @@ void setup()
 
 void loop()
 {
-  ArduinoOTA.handle(); // Listen for Arduino code upload OTA.
-
+  network.handle(); // Manages OTA
   // Check if WiFi is connected before attempting to connect to Blynk
   if (WiFi.status() == WL_CONNECTED) {
     // If not connected to Blynk, try to connect
     if (!Blynk.connected()) {
       blynk_connection_attempts++;
-      
       // If we've failed too many times and not already provisioning, launch provisioner
       if (blynk_connection_attempts >= BLYNK_MAX_ATTEMPTS && !has_provisioned_blynk) {
         Serial.println("Blynk connection failed multiple times. Launching Blynk Provisioner...");
         has_provisioned_blynk = true; // Prevent repeated provisioning attempts
-        launchBlynkProvisioner();
-        
+        network.launchBlynkProvisioner();
         // Reconfigure and try again
         int port_int = atoi(blynk_port);
         Blynk.config(blynk_auth, blynk_server, port_int);
         blynk_connection_attempts = 0; // Reset counter
       }
-      
       // Blink onboard led on attempts to connect to blynk server.
       digitalWrite(2, HIGH); 
       delay(500);
@@ -402,198 +273,14 @@ void loop()
     // If connected, run the Blynk routine
     else {
       blynk_connection_attempts = 0; // Reset on successful connection
-      Blynk.run();
-      timer.run(); // Initiates BlynkTimer.
+      Blynk.run(); // Run Blynk
+      timer.run(); // Run BlynkTimer
     }
   }
 }
 
 BLYNK_CONNECTED() {
     Blynk.syncAll(); // Sync blynk client app with blynk server to recall last values.
-}
-
-// Combined provisioner for WiFi + Blynk on initial WiFi connection failure
-void launchCombinedProvisioner() {
-  Serial.println("\n=== WiFi + Blynk Configuration Portal ===\n");
-  
-  // Combine server and port for display
-  char server_port_combined[46];
-  snprintf(server_port_combined, sizeof(server_port_combined), "%s:%s", blynk_server, blynk_port);
-  
-  // Create custom parameters for Blynk config - separate server:port and auth
-  WiFiManagerParameter custom_blynk_server("blynk_server", "Blynk Server (IP:PORT)", server_port_combined, 40);
-  WiFiManagerParameter custom_blynk_auth("blynk_auth", "Blynk Auth Token", blynk_auth, 34);
-  
-  // Add custom parameters to WiFiManager
-  wm.addParameter(&custom_blynk_server);
-  wm.addParameter(&custom_blynk_auth);
-  
-  // Set callback for when config is saved
-  wm.setSaveConfigCallback([]() {
-    Serial.println("Config saved - parsing Blynk settings...");
-  });
-  
-  Serial.println("Starting WiFi Configuration Portal...");
-  Serial.println("Connect to AP: Tank-Setup");
-  Serial.println("Open browser to: http://192.168.4.1\n");
-  Serial.println("Enter:");
-  Serial.println("  - WiFi SSID");
-  Serial.println("  - WiFi Password");
-  Serial.println("  - Blynk Server: IP:PORT format");
-  Serial.println("    Example: 192.168.1.200:8080");
-  Serial.println("  - Blynk Auth Token");
-  Serial.println("    Example: YourAuthTokenHere\n");
-  
-  // Set timeout and start portal
-  wm.setConfigPortalTimeout(300); // 5 minutes timeout
-  
-  // Start the portal with custom AP name and password
-  bool res = wm.startConfigPortal("Tank-Setup", "password123");
-  
-  if (res) {
-    Serial.println("\nPortal connection successful!");
-    
-    // Get the Blynk server config (IP:PORT format)
-    String blynkServerConfig = custom_blynk_server.getValue();
-    String blynkAuthToken = custom_blynk_auth.getValue();
-    
-    if (blynkServerConfig.length() > 0) {
-      Serial.println("Parsing Blynk configuration...");
-      
-      // Parse server:port
-      int colonPos = blynkServerConfig.indexOf(':');
-      
-      if (colonPos > 0) {
-        String server = blynkServerConfig.substring(0, colonPos);
-        String port = blynkServerConfig.substring(colonPos + 1);
-        String auth = blynkAuthToken;
-        
-        Serial.println("Parsed Blynk Configuration:");
-        Serial.print("  Server: ");
-        Serial.println(server);
-        Serial.print("  Port: ");
-        Serial.println(port);
-        Serial.print("  Auth: ");
-        Serial.println(auth);
-        
-        // Update global variables
-        server.toCharArray(blynk_server, 40);
-        port.toCharArray(blynk_port, 6);
-        auth.toCharArray(blynk_auth, 34);
-        
-        // Save to preferences
-        preferences.begin("tank_config", false);
-        preferences.putString("server", server);
-        preferences.putString("port", port);
-        preferences.putString("auth", auth);
-        preferences.end();
-      } else {
-        Serial.println("Warning: Blynk config format invalid. Using defaults from secrets.");
-      }
-    } else {
-      Serial.println("No Blynk config provided. Using defaults from secrets.");
-    }
-  } else {
-    Serial.println("Portal timeout or failed!");
-  }
-}
-
-// Blynk-only provisioner for subsequent Blynk connection failures
-void launchBlynkProvisioner() {
-  Serial.println("\n=== Blynk Server Configuration Portal ===\n");
-
-  if(!LittleFS.begin()) {
-      Serial.println("LittleFS Mount Failed!");
-      return;
-    }
-
-  // Temporarily stop the main AsyncWebServer to free port 80
-  Serial.println("Stopping WebSerial server to free port 80...");
-  server.end();
-  delay(500);
-
-  // Restart timer variables
-  bool shouldRestart = false;
-  unsigned long restartTimer = 0;
-
-  // Create soft AP for Blynk configuration
-  WiFi.softAP(softAPName, softAPPass);
-  IPAddress softAPIP = WiFi.softAPIP();
-  Serial.printf("Soft AP IP: %s\n", softAPIP.toString().c_str());
-  
-  // Create a simple AsyncWebServer for Blynk config only (no WiFi fields)
-  AsyncWebServer blynkServer(80);
-  
-  // Serve the Blynk configuration Bootstrap HTML form with current values pre-filled
-  blynkServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(LittleFS, "/blynk.html", String(), false, processor);
-  });
-  
-  // Serve Bootstrap CSS (Static files from /data)
-  blynkServer.serveStatic("/", LittleFS, "/");
-
-  // Handle form submission
-  blynkServer.on("/save", HTTP_POST, [&](AsyncWebServerRequest *request) {
-    if (request->hasParam("server", true) && request->hasParam("auth", true)) {
-      String serverParam = request->getParam("server", true)->value();
-      String authParam = request->getParam("auth", true)->value();
-      
-      Serial.println("Blynk config received!");
-      Serial.printf("Server: %s\n", serverParam.c_str());
-      Serial.printf("Auth: %s\n", authParam.c_str());
-      
-      // Parse server:port
-      int colonPos = serverParam.indexOf(':');
-      if (colonPos > 0) {
-        String server = serverParam.substring(0, colonPos);
-        String port = serverParam.substring(colonPos + 1);
-        
-        // Update globals
-        server.toCharArray(blynk_server, 40);
-        port.toCharArray(blynk_port, 6);
-        authParam.toCharArray(blynk_auth, 34);
-        
-        // Save to preferences
-        preferences.begin("tank_config", false);
-        preferences.putString("server", server);
-        preferences.putString("port", port);
-        preferences.putString("auth", authParam);
-        preferences.end();
-        
-        //Success page redirect
-        request->send(LittleFS, "/success.html", "text/html");
-        // Restart logic
-        shouldRestart = true;
-        restartTimer = millis();
-      } else {
-        // Error redirect
-        Serial.println("Invalid format received. Redirecting back...");
-        request->redirect("/?error=1");
-      }
-    }
-  });
-  
-  blynkServer.begin();
-  Serial.println("Blynk provisioning server started at http://192.168.4.1");
-  Serial.println("Configuration timeout: 5 minutes\n");
-  
-  // Wait for configuration (5 minutes timeout)
-  unsigned long startTime = millis();
-  while (millis() - startTime < 300000) {  // 5 minutes
-    delay(100);
-    // Check if we need to restart
-    if (shouldRestart && (millis() - restartTimer > 2000)) {
-      ESP.restart();
-    }
-  }
-  
-  blynkServer.end();
-  WiFi.softAPdisconnect(true);  // Turn off soft AP
-  Serial.println("Blynk provisioner timeout - exiting...");
-  
-  // Restart the main WebSerial server
-  Serial.println("Restarting WebSerial server...");
-  server.begin();
 }
 
 // Joystick control
@@ -747,75 +434,4 @@ void readBatteryVoltage() {
   
   // Optional: Log to terminal for auditing
   // dualPrintf("Battery: %.2fV (%d%%)\n", currentVoltage, (int)batteryPct);
-}
-
-// Arduino OTA
-void OTA_Setup(){
-  Serial.println("Booting");
-  // WiFi is already configured in setup(), just wait for connection
-  // OTA will work once WiFi is connected or after provisioning
-  
-  // Hostname defaults to esp3232-[MAC]
-  ArduinoOTA.setHostname("Tank-NodeMCU-32S");
-
-  // No authentication by default
-  // ArduinoOTA.setPassword("admin");
-
-  // Password can be set with it's md5 value as well
-  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
-  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
-
-  ArduinoOTA
-    .onStart([]() {
-      String type;
-      if (ArduinoOTA.getCommand() == U_FLASH)
-        type = "sketch";
-      else // U_SPIFFS
-        type = "filesystem";
-
-      // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-      Serial.println("Start updating " + type);
-    })
-    .onEnd([]() {
-      Serial.println("\nEnd");
-    })
-    .onProgress([](unsigned int progress, unsigned int total) {
-      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-    })
-    .onError([](ota_error_t error) {
-      Serial.printf("Error[%u]: ", error);
-      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-      else if (error == OTA_END_ERROR) Serial.println("End Failed");
-    });
-
-  ArduinoOTA.begin();
-
-  Serial.println("Ready");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-// WebSerial Setup function.
-void WebSerial_Setup(){
-// WebSerial is accessible at "<IP Address>/webserial" in browser
-WebSerial.begin(&server);
-
-/* Attach Message Callback */
-WebSerial.onMessage([&](uint8_t *data, size_t len) {
-  Serial.printf("Received %u bytes from WebSerial: ", len);
-  Serial.write(data, len);
-  Serial.println();
-  WebSerial.println("Received Data...");
-  String d = "";
-  for(size_t i=0; i < len; i++){
-    d += char(data[i]);
-  }
-  WebSerial.println(d);
-});
-
-// Start server
-server.begin();
 }
