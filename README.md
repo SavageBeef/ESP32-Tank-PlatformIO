@@ -223,7 +223,7 @@ Follow these steps to clone the workspace, build the binary, and upload the code
 Open a terminal window on your machine and clone the codebase:
 ```bash
 # Clone this repository
-git clone [https://github.com/SavageBeef/ESP32-Tank-PlatformIO.git](https://github.com/SavageBeef/ESP32-Tank-PlatformIO.git)
+git clone https://github.com/SavageBeef/ESP32-Tank-PlatformIO.git
 
 # Move into the project directory
 cd ESP32-Tank-PlatformIO
