@@ -1,6 +1,12 @@
+<div align="center">
+
 # ESP32-Tank: Modular, Network-Controlled DIY Tank
 
 **main:** <img src="https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/unit_tests.yml/badge.svg?branch=main" align="center" alt="Tests (main)"> <img src="https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/firmware_build.yml/badge.svg?branch=main" align="center" alt="Build (main)"> | **dev:** <img src="https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/unit_tests.yml/badge.svg?branch=dev" align="center" alt="Tests (dev)"> <img src="https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/firmware_build.yml/badge.svg?branch=dev" align="center" alt="Build (dev)">
+
+</div>
+
+---
 
 ## 🚀 Overview
 
@@ -113,7 +119,7 @@ This provides optimal voltage for the **ComXim 25GA370 DC Brush Motors** (12V ra
 | **Async TCP** | ESP32Async | 3.4.9 | Underlying TCP library for webserver |
 | **SR04** | Elegoo | - | HC-SR04 ultrasonic sensor driver |
 | **WiFiManager** | tzapu | 2.0.0 | Captive portal network provisioning |
-| [**arduino-littlefs-upload**](https://github.com/earlephilhower/arduino-littlefs-upload) | earlephilhower | 1.6.3 | Filesystem upload plugin for data folder |
+| **arduino-littlefs-upload** | earlephilhower | 1.6.3 | Filesystem upload plugin for data folder |
 
 ---
 
