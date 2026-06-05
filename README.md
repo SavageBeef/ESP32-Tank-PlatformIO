@@ -1,7 +1,6 @@
 # ESP32-Tank: Modular, Network-Controlled DIY Tank
 
-![Tests](https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/unit_tests.yml/badge.svg)
-![Build](https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/firmware_build.yml/badge.svg)
+**main:** <img src="https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/unit_tests.yml/badge.svg?branch=main" align="center" alt="Tests (main)"> <img src="https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/firmware_build.yml/badge.svg?branch=main" align="center" alt="Build (main)"> | **dev:** <img src="https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/unit_tests.yml/badge.svg?branch=dev" align="center" alt="Tests (dev)"> <img src="https://github.com/SavageBeef/ESP32-Tank-PlatformIO/actions/workflows/firmware_build.yml/badge.svg?branch=dev" align="center" alt="Build (dev)">
 
 ## 🚀 Overview
 
@@ -29,9 +28,9 @@ The Captive Portal and other network-related code have been decoupled to simplif
 
 ---
 
-## Architecture & QA
+## 🏛️ Architecture & QA
 
-### The Transition to PlatformIO
+### 🐦‍🔥 The Transition to PlatformIO
 Originally developed as a single Arduino sketch (`.ino`) with loose header files (`.h`), this project was re-engineered to scale gracefully:
 * **Decoupled Logic:** Movement calculations and battery math reside in standalone classes, allowing them to be compiled and tested on a PC without ESP32 hardware.
 * **Dependency Management:** Explicit library handling (Blynk, WebSerial, etc.) ensures consistent, reproducible builds across different development environments.
@@ -56,7 +55,7 @@ The project includes a comprehensive test suite located in the `test/` directory
 
 ## 📋 Hardware Specifications
 
-### Components List
+### 🔨 Components List
 
 | Component Reference | Description |
 | :--- | :--- |
@@ -88,7 +87,7 @@ The theoretical power design utilizes **eight 18650 Li-ion batteries** configure
 This provides optimal voltage for the **ComXim 25GA370 DC Brush Motors** (12V rated), ensuring high performance without significant voltage drops under heavy load.
 
 > [!NOTE] 
-> **Current Physical Setup:** The physical tank build currently uses a **4-Series (4S)** configuration using dedicated 18650 battery holders. The original `TP4056` charging modules have been replaced by an external XTAR VC8S battery charger. This 4S setup yields approximately 1 hour of continuous runtime.
+> **Current Physical Setup:** The physical tank build currently uses a **4-Series (4S)** configuration using dedicated 18650 battery holders. The original `TP4056` charging modules have been replaced by an external `XTAR VC8S` battery charger. This 4S setup yields approximately 1 hour of continuous runtime.
 
 ---
 
@@ -120,7 +119,7 @@ This provides optimal voltage for the **ComXim 25GA370 DC Brush Motors** (12V ra
 
 ## 📱 Blynk Control Setup
 
-### Local Server Installation
+### 💻 Local Server Installation
 This project connects to a local self-hosted Blynk server. Source code can be found at [blynk-server](https://github.com/Peterkn2001/blynk-server).
 
 #### Option 1: Native Script Execution
@@ -142,10 +141,10 @@ Uses the multi-arch [`hokori/blynk-server:0.41.17`](https://hub.docker.com/r/hok
     docker-compose down
     ```
 
-### Mobile App Interface
+### 📱 Mobile App Interface
 * **Blynk App Version:** 2.27.34
 
-| Virtual Pin Mapping | Control UI Live View |
+| Virtual Pins Mapping | Control UI Live View |
 | :---: | :---: |
 | ![Virtual Pins](doc/Blynk%20App%20Virtual%20Pins.jpg) | ![Control running](doc/Blynk%20App%20Running.jpg) |
 
@@ -161,6 +160,8 @@ Before your phone or the ESP32 can connect, an account must exist on your local 
 2. Log in using your admin credentials (default is `admin@blynk.cc` / `admin`).
 3. Navigate to the **Users** tab and click **Add New User**. 
 4. Input an email and password. This will be the profile you use to log into the mobile app.
+
+Note: Alternative steps can be found [here](https://github.com/SavageBeef/blynk-configs#%EF%B8%8F-manual-user-creation).
 
 #### Step 2: Configure the Mobile App Connection
 To redirect the legacy Blynk App (v2.27.34) away from default cloud servers to your machine:
@@ -211,7 +212,7 @@ IP:       192.168.4.1
 
 ---
 
-## 🛠️ Flash & Deployment Guide
+## 🛠️ Flash & Deployment
 
 Follow these steps to clone the workspace, build the binary, and upload the code directly to your hardware using **PlatformIO**.
 
@@ -246,7 +247,7 @@ pio test -e native
 ### Step 3: Flash Firmware and Filesystem
 
 1. Connect your ESP32 to your PC using a high-quality data-capable Micro-USB or USB-C cable.
-2. Click the PlatformIO Ant Icon on the left menu bar and locate the esp32dev target.
+2. Click the PlatformIO Ant Icon on the left menu bar and locate the nodemcu-32s target.
 3. Upload the Firmware Binary: Under General Tasks, click Upload (or click the → Arrow Icon on the VS Code status bar) to build and flash the application code.
 4. Upload the Filesystem Image: Under the Platform Tasks dropdown, click Upload Filesystem Image to compile and flash the data/ assets directory using LittleFS.
 
