@@ -3,8 +3,14 @@ name: Firmware Build
 on:
   push:
     branches: [ main, dev ]
+    paths-ignore:         # Changes to ignore
+      - 'README.md'       # Ignores the main root README
+      - '**/README.md'    # Ignores a README.md inside any subfolder or nested path
+      - 'doc/**'          # Ignores changes to anything inside documentation asset folder
+      - '.gitignore'
   pull_request:
     branches: [ main, dev ]
+    paths-ignore: ['README.md', '**/README.md', 'doc/**', '.gitignore']
 
 jobs:
   esp32_build:
