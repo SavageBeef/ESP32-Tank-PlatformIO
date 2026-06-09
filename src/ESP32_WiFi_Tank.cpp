@@ -246,6 +246,11 @@ void setup()
 
 void loop()
 {
+  // Failsafe to halt the tank when connection is loss.
+  if (WiFi.status() != WL_CONNECTED || !Blynk.connected()) {
+    ledcWrite(motorL_EN, noSpeed);
+    ledcWrite(motorR_EN, noSpeed);
+  }
   network.handle(); // Manages OTA
   // Check if WiFi is connected before attempting to connect to Blynk
   if (WiFi.status() == WL_CONNECTED) {
