@@ -46,17 +46,17 @@
 // Dual Printf to Serial Monitor and WebSerial Monitor
 #include "dual_printf.h"
 
-int LED = 2;
+#define LED 2
 
 // Motor 1 (Left)
-#define motorL_Negative 22
-#define motorL_Positive 23 
-#define motorL_EN 21    
+#define motorL_Negative 11
+#define motorL_Positive 12 
+#define motorL_EN 10    
 
 // Motor 2 (Right)
-#define motorR_Negative 27
-#define motorR_Positive 26 
-#define motorR_EN 25
+#define motorR_Negative 18
+#define motorR_Positive 17 
+#define motorR_EN 16
 
 // Analog speeds from 0 (lowest) - 1023 (highest).
 // 3 speeds used -- 0 (noSpeed), 750 (minSpeed), 1023 (maxSpeed).
@@ -82,8 +82,8 @@ int resolution = 10; // Was 10
 
 // Setting up Ultrasonic Sensor.
 #include <SR04.h>
-#define TRIG_PIN 18
-#define ECHO_PIN 19
+#define TRIG_PIN 41
+#define ECHO_PIN 42
 SR04 sr04 = SR04(ECHO_PIN,TRIG_PIN);
 int distance;
 
@@ -95,14 +95,14 @@ bool isHaltedByUSonic = false;
 int ultrasonicLimit = 40; // Default value in cm
 
 // Lights.
-#define lights 16 // Signal to NPN2 Transistor.
+#define lights 47 // Signal to NPN2 Transistor.
 WidgetLED ledIndicator(V11);
 
 // Control ultrasonic NPN1 Transistor.
-#define currentToUSonic 5
+#define currentToUSonic 48
 
 // Pin for battery voltage.
-#define batteryVoltagePin 35
+#define batteryVoltagePin 5
 void readBatteryVoltage();
 
 // Battery Parameters.
@@ -202,7 +202,7 @@ void setup()
 
   Serial.println("\nBlynk connected successfully!");
 
-  pinMode(2, OUTPUT);
+  pinMode(LED, OUTPUT);
   
   pinMode(motorL_Negative, OUTPUT);
   pinMode(motorL_Positive, OUTPUT);
@@ -268,9 +268,9 @@ void loop()
         blynk_connection_attempts = 0; // Reset counter
       }
       // Blink onboard led on attempts to connect to blynk server.
-      digitalWrite(2, HIGH); 
+      digitalWrite(LED, HIGH); 
       delay(500);
-      digitalWrite(2, LOW);
+      digitalWrite(LED, LOW);
       delay(500);
       Serial.println("Attempting to connect to Blynk server...");
       Blynk.connect(5000); // 5 sec timeout
