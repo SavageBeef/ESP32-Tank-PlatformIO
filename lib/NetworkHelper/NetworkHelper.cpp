@@ -26,7 +26,8 @@ void NetworkHelper::begin(const char *baseName, const char *password)
   _blynkAPName = String(baseName) + "-Blynk-Setup";
   _otaHost = String(baseName) + "-NodeMCU-32S";
 
-  LittleFS.begin();
+  // Passing 'true' forces formatting if mounting fails
+  LittleFS.begin(true);
 
   // --- 1. Load Custom Params (Blynk) from Flash ---
   Serial.println("Loading preferences...");
@@ -53,16 +54,36 @@ void NetworkHelper::begin(const char *baseName, const char *password)
   Serial.println("Attempting to connect to saved Wi-Fi...");
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin();
+  delay(100);
 
+  // If memory is completely empty (like a fresh flash), manually force the 
+  // hardcoded ESP32_secrets.h credentials into the underlying Wi-Fi radio profile
+  if (WiFi.SSID() == "") {
+    Serial.println("No saved Wi-Fi credentials found in flash memory.");
+    Serial.printf("Preloading fallback credentials from ESP32_secrets.h: %s\n", Secret_SSID);
+    
+    // This physically programs the radio profile with your hardcoded fallback secrets
+    WiFi.begin(Secret_SSID, Secret_PASS);
+    } 
+  else {
+    Serial.print("Saved credentials found in flash. Attempting connection to: ");
+    Serial.println(WiFi.SSID());
+
+    // This tells the radio to run natively using whatever profile was saved last
+    WiFi.begin();
+  }
+
+  // Give the hardware radio exactly 10 seconds to try connecting to the network profile
+  Serial.print("Connecting");
   int wifi_attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && wifi_attempts < 5)
+  while (WiFi.status() != WL_CONNECTED && wifi_attempts < 20)
   {
-    delay(12000);
+    delay(500);
     Serial.print(".");
     wifi_attempts++;
   }
 
+  // --- 3. FALLBACK TO CAPTIVE PORTAL ONLY IF THE CONNECTION CRASHED ---
   if (WiFi.status() != WL_CONNECTED)
   {
     // WiFi FAILED: Launch combined provisioner for WiFi + Blynk credentials
@@ -253,12 +274,13 @@ void NetworkHelper::launchCombinedProvisioner()
 void NetworkHelper::launchBlynkProvisioner()
 {
   Serial.println("\n=== Blynk Server Configuration Portal ===\n");
-
-  if (!LittleFS.begin())
+  // Passing 'true' forces formatting if mounting fails
+  if (!LittleFS.begin(true))
   {
     Serial.println("LittleFS Mount Failed!");
     return;
   }
+  Serial.println("LittleFS mounted successfully (or formatted and mounted).");
 
   // Temporarily stop the main AsyncWebServer to free port 80
   Serial.println("Stopping WebSerial server to free port 80...");
