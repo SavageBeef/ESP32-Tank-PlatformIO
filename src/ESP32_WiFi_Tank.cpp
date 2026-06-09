@@ -246,40 +246,99 @@ void setup()
 
 void loop()
 {
+  // --- 1. IMMEDIATE SAFETY FAILSAFE ---
   // Failsafe to halt the tank when connection is loss.
   if (WiFi.status() != WL_CONNECTED || !Blynk.connected()) {
     ledcWrite(motorL_EN, noSpeed);
     ledcWrite(motorR_EN, noSpeed);
   }
-  network.handle(); // Manages OTA
-  // Check if WiFi is connected before attempting to connect to Blynk
-  if (WiFi.status() == WL_CONNECTED) {
-    // If not connected to Blynk, try to connect
-    if (!Blynk.connected()) {
-      blynk_connection_attempts++;
-      // If we've failed too many times and not already provisioning, launch provisioner
-      if (blynk_connection_attempts >= BLYNK_MAX_ATTEMPTS && !has_provisioned_blynk) {
-        Serial.println("Blynk connection failed multiple times. Launching Blynk Provisioner...");
-        has_provisioned_blynk = true; // Prevent repeated provisioning attempts
-        network.launchBlynkProvisioner();
-        // Reconfigure and try again
-        int port_int = atoi(blynk_port);
-        Blynk.config(blynk_auth, blynk_server, port_int);
-        blynk_connection_attempts = 0; // Reset counter
+
+  // --- 2. BACKGROUND UTILITIES ---
+  network.handle(); // Manages OTA 
+
+  // --- 3. ACCESS POINT ROAMING & RECONNECT MANAGER ---
+  static unsigned long lastWiFiCheck = 0;
+  const unsigned long wifiCheckInterval = 10000; 
+
+  if (millis() - lastWiFiCheck > wifiCheckInterval) {
+    lastWiFiCheck = millis();
+
+    if (WiFi.status() != WL_CONNECTED) {
+      dualPrintln("WiFi connection lost! Initiating background reconnect...");
+      WiFi.begin(); 
+    } 
+    else if (WiFi.status() == WL_CONNECTED) {
+      int rssi = WiFi.RSSI();
+      // -78 dBm captures the weak zone right before packet loss and input lag begin
+      if (rssi < -78) {
+        dualPrintf("Signal too weak (%d dBm). Disconnecting to hunt for closer AP...\n", rssi);
+        ledcWrite(motorL_EN, noSpeed);
+        ledcWrite(motorR_EN, noSpeed);
+        WiFi.disconnect(false); 
+        WiFi.begin();           
       }
-      // Blink onboard led on attempts to connect to blynk server.
-      digitalWrite(LED, HIGH); 
-      delay(500);
-      digitalWrite(LED, LOW);
-      delay(500);
-      Serial.println("Attempting to connect to Blynk server...");
-      Blynk.connect(5000); // 5 sec timeout
     }
-    // If connected, run the Blynk routine
+  }
+
+  // --- 4. NON-BLOCKING LED STATUS STATE MACHINE ---
+  // We use a single, fast-running clock check to handle all visual modes dynamically
+  static unsigned long lastLEDToggle = 0;
+  unsigned long ledInterval = 0; // 0 means everything is healthy (LED OFF)
+
+  if (WiFi.status() != WL_CONNECTED) {
+    ledInterval = 100; // 🛑 Rapid strobe: Critical Wi-Fi loss/AP hunt
+  } 
+  else if (!Blynk.connected()) {
+    ledInterval = 500; // ⚠️ Steady blink: Wi-Fi good, but Blynk server dropped
+  } 
+  else {
+    ledInterval = 0;   //  OFF: Everything is perfectly healthy
+  }
+
+  // Execute the non-blocking blink logic based on the active state interval
+  if (ledInterval == 0) {
+    digitalWrite(LED, LOW); // Turn the LED completely off during normal operation
+  } else {
+    if (millis() - lastLEDToggle >= ledInterval) {
+      lastLEDToggle = millis();
+      digitalWrite(LED, !digitalRead(LED)); // Toggle the LED state cleanly
+    }
+  }
+
+  // --- 5. ASYNCHRONOUS ENGINE RUN ---
+  if (WiFi.status() == WL_CONNECTED) {
+    // Send Wifi signal strength to virtual pin for in app visual.
+    static unsigned long lastSignalCheck = 0;
+    if (millis() - lastSignalCheck > 5000) { // Every 5 Seconds
+      lastSignalCheck = millis();
+      Blynk.virtualWrite(V16, WiFi.RSSI());
+    }
+
+    Blynk.run(); // Run Blynk 
+    timer.run(); // Run BlynkTimer 
+
+    // --- 6. BACKGROUND PROVISIONING TIMERS ---
+    if (!Blynk.connected()) {
+      static unsigned long lastAttemptTime = 0;
+      if (millis() - lastAttemptTime > 10000) { // Every 10 Seconds
+        lastAttemptTime = millis();
+        blynk_connection_attempts++;
+        dualPrintln("Blynk connecting in background...");
+        // If we've failed too many times and not already provisioning, launch provisioner
+
+        if (blynk_connection_attempts >= BLYNK_MAX_ATTEMPTS && !has_provisioned_blynk) {
+          dualPrintln("Blynk connection failed multiple times. Launching Blynk Provisioner...");
+          has_provisioned_blynk = true; // Prevent repeated provisioning attempts
+          network.launchBlynkProvisioner();
+          // Reconfigure and try again
+          int port_int = atoi(blynk_port);
+          Blynk.config(blynk_auth, blynk_server, port_int);
+          blynk_connection_attempts = 0; // Reset counter 
+        }
+      }
+    }
     else {
       blynk_connection_attempts = 0; // Reset on successful connection
-      Blynk.run(); // Run Blynk
-      timer.run(); // Run BlynkTimer
     }
   }
 }
@@ -313,6 +372,8 @@ BLYNK_WRITE(V5)
   // 3. APPLY TO HARDWARE
   // One central place to handle motor pins
   applyToMotors(cmd);
+
+  dualPrintf("L-PWM: %d | R-PWM: %d\n", cmd.leftPWM, cmd.rightPWM);
 }
 
 void applyToMotors(TankCommand cmd){
