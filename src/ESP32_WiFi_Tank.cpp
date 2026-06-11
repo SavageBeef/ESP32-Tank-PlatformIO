@@ -1,138 +1,97 @@
-/*************************************************************
-  Download latest Blynk library here:
-    https://github.com/blynkkk/blynk-library/releases/latest
+/******************************************************************************
+  ESP32 WiFi Tank Firmware
+  
+  Architected for non-blocking asynchronous execution, low-power software standby,
+  and dynamic high-torque motor control wrappers.
+ ******************************************************************************/
 
-  Blynk is a platform with iOS and Android apps to control
-  Arduino, Raspberry Pi and the likes over the Internet.
-  You can easily build graphic interfaces for all your
-  projects by simply dragging and dropping widgets.
-
-    Downloads, docs, tutorials: http://www.blynk.cc
-    Sketch generator:           http://examples.blynk.cc
-    Blynk community:            http://community.blynk.cc
-    Follow us:                  http://www.fb.com/blynkapp
-                                http://twitter.com/blynk_app
-
-  Blynk library is licensed under MIT license
-  This example code is in public domain.
-
- *************************************************************
-  This example runs directly on ESP32 chip.
-
-  Note: This requires ESP32 support package:
-    https://github.com/espressif/arduino-esp32
-
-  Please be sure to select the right ESP32 module
-  in the Tools -> Board menu!
-
-  Change WiFi ssid (line 62), pass (line 63), and Blynk auth token (line 58) to run :)
-  If you're using custom server, also change IPAddress (line 135). 
-  Feel free to apply it to any other example. It's simple!
- *************************************************************/
-
+// ============================================================================
+// 1. PREPROCESSOR DIRECTIVES & LIBRARY INCLUDES
+// ============================================================================
 #include <Arduino.h>
-#include "TankDrive.h" //Tank Core Logic
-#include "BatteryMath.h"
-#include "NetworkHelper.h" // WIFI, OTA, WebSerial, Captive Portals
 
-/* Comment this out to disable prints and save space */
-#define BLYNK_PRINT Serial
-
+#define BLYNK_PRINT Serial        
 #include <BlynkSimpleEsp32.h>
+#include <SR04.h>                 // Ultrasonic Sensor driver library
 
-// Add printf functionality to WebSerial
-#include "WebSerial_printf.h"
+// Custom System Control Submodules
+#include "TankDrive.h"            // Tank Core Logic
+#include "BatteryMath.h"          // Abstracted Battery voltage calculations
+#include "NetworkHelper.h"        // WIFI, OTA, WebSerial, Captive Portals
+#include "WebSerial_printf.h"     // Printf wrapper for the browser console
+#include "dual_printf.h"          // Consolidated terminal printing routing
 
-// Dual Printf to Serial Monitor and WebSerial Monitor
-#include "dual_printf.h"
+// ============================================================================
+// 2. PHYSICAL HARDWARE PIN MAPS (#define IO Architecture)
+// ============================================================================
+#define LED                 2     // Onboard status indicator
 
-#define LED 2
+// Motor Driver Channel 1 (Left Drive Train)
+#define motorL_EN           10    // PWM speed channel pin
+#define motorL_Negative     11    // Phase orientation control line
+#define motorL_Positive     12    // Phase orientation control line
 
-// Motor 1 (Left)
-#define motorL_Negative 11
-#define motorL_Positive 12 
-#define motorL_EN 10    
+// Motor Driver Channel 2 (Right Drive Train)
+#define motorR_EN           16    // PWM speed channel pin
+#define motorR_Positive     17    // Phase orientation control line
+#define motorR_Negative     18    // Phase orientation control line
 
-// Motor 2 (Right)
-#define motorR_Negative 18
-#define motorR_Positive 17 
-#define motorR_EN 16
+// System Telemetry & Transistor Control Rails
+#define batteryVoltagePin   5     // ADC input tracking input potential
+#define TRIG_PIN            41    // Sonic trigger pulse line
+#define ECHO_PIN            42    // Sonic echo timing line
+#define lights              47    // Gate drive signal to Headlight NPN1 Transistor
+#define currentToUSonic     48    // Gate drive signal to Ultrasonic NPN2 Transistor
 
-// Analog speeds from 0 (lowest) - 1023 (highest).
-// 3 speeds used -- 0 (noSpeed), 750 (minSpeed), 1023 (maxSpeed).
-// Use whatever speeds you want...too fast made it a pain in the ass to control.
-int minSpeed = 750;
-int maxSpeed = 1023;
-int noSpeed = 0;
+// ============================================================================
+// 3. HARDWARE PERIPHERAL CONFIGURATIONS (Immutable Flash Assets)
+// ============================================================================
+// PWM Engine Frequency and Depth Bounds
+const uint32_t freq       = 15000;  // 15 kHz inductive tuning for ComXim 25GA370 motors
+const uint16_t lightsFreq = 1000;   // 1 kHz flicker-free baseline for headlight dimming
+const uint8_t  resolution = 10;     // 10-bit deep duty resolution canvas (0-1023)
 
-// Neutral zone settings for x and y.
-// Joystick must move outside these boundary numbers (in the blynk client app) to activate the motors.
-// Makes it a easier to control the tank.
-int minRange = 312;
-int maxRange = 712;
-int minNeuRange = 412;
-int maxNeuRange = 612;
+// Software Standby💤 Constraints
+#define STANDBY_BUTTON_VPIN 17      // Blynk App virtual standby switch map
+const uint16_t SLEEP_DURATION_SEC = 900; // Standby interval (15 minutes)
 
-// Global state tracking for the "Directional Guard"
-XRegion lastXRegion = X_NEUTRAL;
+// Resistor Divider Networks & Telemetry Scales
+const float maxBatteryVoltage  = 16.68; // Fully charged cell ceiling target (4.17V/cell)
+const float minBatteryVoltage  = 12.00; // System cutoff floor limit (3.0V/cell)
+const float R1                 = 41860.0; // Multimeter audited high-side resistor value - R1 in voltage divider (42kΩ)
+const float R2                 = 9989.0;  // Multimeter audited low-side resistor value - R2 in voltage divider (10kΩ)
+const float calibrationFactor  = 1.025;   // Empirical ADC offset calibration coefficient = Voltage reading from multimeter / Voltage after voltage divider
 
-// Setting PWM properties for motors.
-int freq = 5000; // Was 30000 
-int resolution = 10; // Was 10
+// ============================================================================
+// 4. INSTANTIATED LIBRARY OBJECTS & APP UI LINKS
+// ============================================================================
+NetworkHelper network;              // Abstracted network and credential service
+BlynkTimer    timer;                // Non-blocking background callback scheduler
+SR04          sr04 = SR04(ECHO_PIN, TRIG_PIN); // Sonic sensor instantiation
+WidgetLED     ledIndicator(V11);    // Virtual Dashboard diagnostic dashboard link
 
-// Setting up Ultrasonic Sensor.
-#include <SR04.h>
-#define TRIG_PIN 41
-#define ECHO_PIN 42
-SR04 sr04 = SR04(ECHO_PIN,TRIG_PIN);
-int distance;
+// ============================================================================
+// 5. RUNTIME STATE VARIABLES & SYSTEM FLAGS (Dynamic SRAM)
+// ============================================================================
+// Core Speed Parameters
+uint16_t minSpeed   = 750;          // Dynamic operational floor (auto-scaled)
+uint16_t maxSpeed   = 1023;         // Dynamic execution limit (slider adjusted)
+const uint8_t noSpeed = 0;          // Structural reference for absolute halt
+XRegion lastXRegion = X_NEUTRAL;    // Persistent regional tracking for anti-shear safety
 
-// Timer to help run Ultrasonic button state check.
-BlynkTimer timer;
-void uSonicButtonCheck();
-int uSonicState;
-bool isHaltedByUSonic = false;
-int ultrasonicLimit = 40; // Default value in cm
+// Sensor Outputs & Limit Values
+uint16_t distance;                  // Variable tracking calculated distance (cm)
+bool     uSonicState      = false;  // Virtual slider toggle tracking switch
+bool     isHaltedByUSonic = false;  // Intercept flag for structural obstacle braking
+uint8_t  ultrasonicLimit  = 40;     // Minimum obstacle proximity buffer limit (cm)
 
-// Lights.
-#define lights 47 // Signal to NPN2 Transistor.
-int lightsFreq = 1000;
-WidgetLED ledIndicator(V11);
+// Sleep Trigger
+bool     isStandbyActive  = false;  // Tracking standby loop activation state
 
-// Control ultrasonic NPN1 Transistor.
-#define currentToUSonic 48
-
-// Pin for battery voltage.
-#define batteryVoltagePin 5
-void readBatteryVoltage();
-
-// Battery Parameters.
-const float maxBatteryVoltage = 16.68;  // Max voltage for a 18650 3.7v Li-ion cell. 4.2V/cell. 4.17V/cell measured.
-const float minBatteryVoltage = 12;  // Min voltage for a 18650 3.7 Li-ion cell. 3V/cell.
-// Voltage Divider Parameters.
-const float R1 = 41860.0;  // Resistor R1 in voltage divider (42kΩ), multimeter measured value provided.
-const float R2 = 9989.0;  // Resistor R2 in voltage divider (10kΩ), multimeter measured value provided.
-// Factor to correct for ADC inaccuracies.
-const float calibrationFactor = 1.025; // = Voltage reading from multimeter / Voltage after voltage divider.
-
-// --- SLEEP DEFINITIONS ---
-#define STANDBY_BUTTON_VPIN  17   // Virtual Pin for Standby Switch
-const uint64_t SLEEP_DURATION_SEC = 900; // 15 Minutes (900 seconds)
-bool isStandbyActive = false; // Tracks if the current boot is just a quick 15-minute nap check
-void putTankToSoftwareSleep();
-
-// Function not needed.
-// Arduino like analogWrite.
-// Value has to be between 0 and valueMax.
-void ledcAnalogWrite(uint8_t channel, uint32_t value, uint32_t valueMax = 255) {
-  // calculate duty, 4095 from 2 ^ 12 - 1
-  uint32_t duty = (1023 / valueMax) * min(value, valueMax);
-
-  // write duty to LEDC
-  ledcWrite(channel, duty);
-}
-
-// Print to both Serial Monitor and WebSerial Monitor.
+// ============================================================================
+// 6. GLOBAL TEMPLATE FUNCTIONS & PROTOTYPES
+// ============================================================================
+// Consolidated Cross-Terminal Mirroring Templates
 template <typename T>
 void dualPrint(T data) {
   Serial.print(data);
@@ -145,51 +104,47 @@ void dualPrintln(T data) {
   WebSerial.println(data);
 }
 
-// Class Instantiation
-NetworkHelper network;
-
-// Declare functions
+// Internal Compilation Forward Declarations
 void applyToMotors(TankCommand cmd);
+void uSonicButtonCheck();
+void readBatteryVoltage();
+void putTankToSoftwareSleep();
 
 void setup()
 {
-  // Debug console
   Serial.begin(115200);
+  delay(2000); // Allow hardware lines and serial interface to settle
   
-  // Give serial time to initialize and wait for monitor to connect
-  delay(2000);
   Serial.println("\n\n=== TANK BOOTING ===");
   Serial.println("Initializing systems...");
 
-  network.begin("SavageTank", "password123"); // Manages WIFI, Captive Portals, Web Serial setup and Arduino OTA setup
+  // Configures WiFi, access points, OTA endpoints, and mounts local servers
+  network.begin("SavageTank", "password123"); // Captive portal AP prefix name and password
 
-  // --- 4. ATTEMPT BLYNK CONNECTION ---
+  // --- ATTEMPT BLYNK CONNECTION ---
   Serial.println("\n--- Blynk Connection Phase ---");
-
-  // Convert port char array to integer for the function
-  int port_int = atoi(blynk_port);
+  int port_int = atoi(blynk_port); // Convert port char array to integer for the Blynk.config()function
 
   Serial.print("Attempting Blynk Server: ");
   Serial.print(blynk_server);
   Serial.print(":");
   Serial.println(port_int);
 
-  // IP and Port of Blynk Server.
   Blynk.config(blynk_auth, blynk_server, port_int);
 
-  // Try to connect to Blynk server
+  // Synchronous connection attempt loop
   int blynk_startup_attempts = 0;
   while (!Blynk.connected() && blynk_startup_attempts < 5) {
     Serial.print(".");
-    Blynk.connect(4000); // 4 second timeout per attempt
+    Blynk.connect(4000); // 4-second processing allotment per iteration
     blynk_startup_attempts++;
   }
 
+  // Fallback to internal captive credential provisioner on validation breakdown
   if (!Blynk.connected()) {
     Serial.println("\nBlynk server connection failed. Launching Blynk Provisioner...");
     network.launchBlynkProvisioner();
 
-    // Try to reconnect with new credentials
     port_int = atoi(blynk_port);
     Blynk.config(blynk_auth, blynk_server, port_int);
 
@@ -209,45 +164,36 @@ void setup()
 
   Serial.println("\nBlynk connected successfully!");
 
+  // Pin Configuration Declarations
   pinMode(LED, OUTPUT);
-  
   pinMode(motorL_Negative, OUTPUT);
   pinMode(motorL_Positive, OUTPUT);
   pinMode(motorL_EN, OUTPUT);
   pinMode(motorR_Negative, OUTPUT);
   pinMode(motorR_Positive, OUTPUT);
   pinMode(motorR_EN, OUTPUT);
-
   pinMode(lights, OUTPUT);
-
   pinMode(currentToUSonic, OUTPUT);
-
   pinMode(batteryVoltagePin, INPUT);
   
-  
-  // Attach PWM functionalitites via ledc to the GPIO to be controlled.
+  // Link hardware peripheral channels to assigned outputs via LEDC layer
   ledcAttach(motorL_EN, freq, resolution);
   ledcAttach(motorR_EN, freq, resolution);
   ledcAttach(lights, lightsFreq, resolution);
 
-  // Blink Lights.
-  ledcWrite(lights, 0);
-  delay(250);
-  ledcWrite(lights, 511);
-  delay(250);
-  ledcWrite(lights, 0);
-  delay(250);
-  ledcWrite(lights, 766);
-  delay(250);
+  // Initialization Diagnostic Light Pattern
+  ledcWrite(lights, 0);   delay(250);
+  ledcWrite(lights, 511); delay(250);
+  ledcWrite(lights, 0);   delay(250);
+  ledcWrite(lights, 766); delay(250);
   ledcWrite(lights, 0);
 
-  // Set a function to be called every 50ms.
+  // Core Asynchronous Polling Interval Schedules
+  // Set a function to be called every X ms
   timer.setInterval(50L, uSonicButtonCheck); 
-
-  // Set a function to be called every 1s.
   timer.setInterval(1000L, readBatteryVoltage);
 
-  // Set default value for ultrasonic limit in app.
+  // Publish baseline constraint setting back up to dashboard engine
   Blynk.virtualWrite(V8, ultrasonicLimit); 
 }
 
