@@ -96,6 +96,7 @@ int ultrasonicLimit = 40; // Default value in cm
 
 // Lights.
 #define lights 47 // Signal to NPN2 Transistor.
+int lightsFreq = 1000;
 WidgetLED ledIndicator(V11);
 
 // Control ultrasonic NPN1 Transistor.
@@ -113,6 +114,12 @@ const float R1 = 41860.0;  // Resistor R1 in voltage divider (42kΩ), multimeter
 const float R2 = 9989.0;  // Resistor R2 in voltage divider (10kΩ), multimeter measured value provided.
 // Factor to correct for ADC inaccuracies.
 const float calibrationFactor = 1.025; // = Voltage reading from multimeter / Voltage after voltage divider.
+
+// --- SLEEP DEFINITIONS ---
+#define STANDBY_BUTTON_VPIN  17   // Virtual Pin for Standby Switch
+const uint64_t SLEEP_DURATION_SEC = 900; // 15 Minutes (900 seconds)
+bool isStandbyActive = false; // Tracks if the current boot is just a quick 15-minute nap check
+void putTankToSoftwareSleep();
 
 // Function not needed.
 // Arduino like analogWrite.
@@ -221,7 +228,7 @@ void setup()
   // Attach PWM functionalitites via ledc to the GPIO to be controlled.
   ledcAttach(motorL_EN, freq, resolution);
   ledcAttach(motorR_EN, freq, resolution);
-  ledcAttach(lights, 1000, resolution);
+  ledcAttach(lights, lightsFreq, resolution);
 
   // Blink Lights.
   ledcWrite(lights, 0);
@@ -246,17 +253,31 @@ void setup()
 
 void loop()
 {
-  // --- 1. IMMEDIATE SAFETY FAILSAFE ---
-  // Failsafe to halt the tank when connection is loss.
+  // --- 1. ABSOLUTE TOP STANDBY SAFETY GATE ---
+  // If the tank is in sleep mode, bypass ALL core processing, driving mechanics, 
+  // roaming checks, and telemetry instantly before any other logic cycles.
+  if (isStandbyActive) {
+    putTankToSoftwareSleep();
+    return; // Stop right here and hand control back to the execution line
+  }
+
+  // --- 2. CORE ENGINE RUNNERS ---
+  // Must run freely out in the open loop so local timers (like battery math 
+  // and ultrasonic monitoring) keep protecting the hardware even if Wi-Fi drops.
+  Blynk.run(); 
+  timer.run(); 
+
+  // --- 3. IMMEDIATE SAFETY FAILSAFE ---
+  // Failsafe to halt the tank when connection is lost mid-run.
   if (WiFi.status() != WL_CONNECTED || !Blynk.connected()) {
     ledcWrite(motorL_EN, noSpeed);
     ledcWrite(motorR_EN, noSpeed);
   }
 
-  // --- 2. BACKGROUND UTILITIES ---
-  network.handle(); // Manages OTA 
+  // --- 4. BACKGROUND UTILITIES ---
+  network.handle(); // Manages OTA updates and background network tasks
 
-  // --- 3. ACCESS POINT ROAMING & RECONNECT MANAGER ---
+  // --- 5. ACCESS POINT ROAMING & RECONNECT MANAGER ---
   static unsigned long lastWiFiCheck = 0;
   const unsigned long wifiCheckInterval = 10000; 
 
@@ -280,7 +301,7 @@ void loop()
     }
   }
 
-  // --- 4. NON-BLOCKING LED STATUS STATE MACHINE ---
+  // --- 6. NON-BLOCKING LED STATUS STATE MACHINE ---
   // We use a single, fast-running clock check to handle all visual modes dynamically
   static unsigned long lastLEDToggle = 0;
   unsigned long ledInterval = 0; // 0 means everything is healthy (LED OFF)
@@ -305,19 +326,16 @@ void loop()
     }
   }
 
-  // --- 5. ASYNCHRONOUS ENGINE RUN ---
+  // --- 7. BACKGROUND TELEMETRY & PROVISIONING ---
   if (WiFi.status() == WL_CONNECTED) {
-    // Send Wifi signal strength to virtual pin for in app visual.
+    // Send Wifi signal strength to virtual pin for in-app visual tracking
     static unsigned long lastSignalCheck = 0;
     if (millis() - lastSignalCheck > 5000) { // Every 5 Seconds
       lastSignalCheck = millis();
       Blynk.virtualWrite(V16, WiFi.RSSI());
     }
 
-    Blynk.run(); // Run Blynk 
-    timer.run(); // Run BlynkTimer 
-
-    // --- 6. BACKGROUND PROVISIONING TIMERS ---
+    // Background Provisioner Trigger Check
     if (!Blynk.connected()) {
       static unsigned long lastAttemptTime = 0;
       if (millis() - lastAttemptTime > 10000) { // Every 10 Seconds
@@ -325,7 +343,6 @@ void loop()
         blynk_connection_attempts++;
         dualPrintln("Blynk connecting in background...");
         // If we've failed too many times and not already provisioning, launch provisioner
-
         if (blynk_connection_attempts >= BLYNK_MAX_ATTEMPTS && !has_provisioned_blynk) {
           dualPrintln("Blynk connection failed multiple times. Launching Blynk Provisioner...");
           has_provisioned_blynk = true; // Prevent repeated provisioning attempts
@@ -344,7 +361,13 @@ void loop()
 }
 
 BLYNK_CONNECTED() {
-    Blynk.syncAll(); // Sync blynk client app with blynk server to recall last values.
+  if (isStandbyActive) {
+    dualPrintln("🔄 Background Check-in: Syncing Standby Pin (V17) only...");
+    Blynk.syncVirtual(STANDBY_BUTTON_VPIN); // Pulls ONLY the standby switch state to minimize data/power usage
+  } else {
+    dualPrintln("🔄 Fresh Wake/Boot: Syncing all dashboard widgets...");
+    Blynk.syncAll(); // Pulls all stored widget states from Blynk Cloud to update hardware variables
+  }
 }
 
 // Joystick control
@@ -428,6 +451,12 @@ BLYNK_WRITE(V3)
 // Function to check ultrasonic button state. On/Off.
 void uSonicButtonCheck() 
 {
+  // Safety Gate: If we are just checking in, keep the sensor powered off and skip!
+  if (isStandbyActive) {
+    digitalWrite(currentToUSonic, LOW);
+    return;
+  }
+
   if (uSonicState == HIGH) // If button is on.
   {
     // Turns on the NPN Transistor to supply power to the sensor
@@ -500,4 +529,177 @@ void readBatteryVoltage() {
   
   // Optional: Log to terminal for auditing
   // dualPrintf("Battery: %.2fV (%d%%)\n", currentVoltage, (int)batteryPct);
+}
+
+// Handles incoming data from the Standby Switch on V17
+BLYNK_WRITE(STANDBY_BUTTON_VPIN) {
+  int standbyState = param.asInt();
+  
+  if (standbyState == HIGH) {
+    // Switch is ON (User wants the tank asleep)
+    dualPrintln("🔒 Standby switch is ACTIVE. Preparing for software sleep...");
+    
+    // CRITICAL FIX: Remove the direct call to putTankToSoftwareSleep()
+    // This avoids a recursive reentrancy loop where the ESP32 goes to sleep
+    // from inside an active Blynk callback. Instead, we flip this flag
+    // and let the main loop() safety gate handle the transition cleanly.
+    isStandbyActive = true;
+  } 
+  else {
+    // Switch was turned OFF (User wants to drive!)
+    dualPrintln("🔓 Standby switch DEACTIVATED. Tank is awake and ready to roll!");
+    
+    // Ensure direction pins are clean and ready
+    digitalWrite(motorL_Positive, LOW);
+    digitalWrite(motorL_Negative, LOW);
+    digitalWrite(motorR_Positive, LOW);
+    digitalWrite(motorR_Negative, LOW);
+
+    // We are no longer checking in; we are ready to roll!
+    isStandbyActive = false;
+  }
+}
+
+void putTankToSoftwareSleep() {
+  dualPrintln("STANDBY: Initializing Software Sleep Mode...");
+
+  // 1. CRITICAL MOTOR SAFETY FENCE
+  // Force all PWM speeds to zero instantly before breaking control paths
+  ledcWrite(motorL_EN, noSpeed);
+  ledcWrite(motorR_EN, noSpeed);
+
+  // 2. HEADLIGHTS & ULTRASONIC HARDWARE LOCKDOWN
+  ledcWrite(lights, 0);                  // Force driving headlights completely OFF
+  digitalWrite(currentToUSonic, LOW);    // Open NPN transistor, cutting hardware power to HC-SR04
+
+  // 3. MOTOR DRIVER ISOLATION (Prevents Phantom Power Leakage)
+  // Shifting control pins to INPUT breaks the digital circuit path to the L293D.
+  // This prevents current from leaking from the ESP32 GPIOs into a non-powered driver.
+  pinMode(motorL_EN, INPUT);
+  pinMode(motorR_EN, INPUT);
+  pinMode(motorL_Positive, INPUT);
+  pinMode(motorL_Negative, INPUT);
+  pinMode(motorR_Positive, INPUT);
+  pinMode(motorR_Negative, INPUT);
+
+  // 4. RADIO & PERIPHERAL SHUTDOWN
+  Blynk.disconnect();
+  WiFi.disconnect(true);    // 'true' turns off the internal RF radio circuitry completely
+  digitalWrite(LED, LOW);   // Turn off diagnostic LED to save power
+
+  dualPrintf("💤 Entering Light Sleep for %llu seconds. RAM preserved.\n", SLEEP_DURATION_SEC);
+  delay(10); // Give Serial buffer a millisecond to flush the print statement
+
+  // 5. CONFIGURE WAKEUP SOURCE
+  // Convert seconds to microseconds (ULL forces Unsigned Long Long math)
+  esp_sleep_enable_timer_wakeup(SLEEP_DURATION_SEC * 1000000ULL);
+
+  // 6. ENTER LIGHT SLEEP MODE
+  // The ESP32 freezes execution right here. CPU clock stops.
+  esp_light_sleep_start();
+
+  // ==================================================================
+  // WAKEUP / RECOVERY SEQUENCE (Runs automatically when timer fires)
+  // ==================================================================
+  
+  // 1. RE-ESTABLISH DIGITAL WALLS (Restore GPIO modes)
+  pinMode(motorL_Positive, OUTPUT);
+  pinMode(motorL_Negative, OUTPUT);
+  pinMode(motorR_Positive, OUTPUT);
+  pinMode(motorR_Negative, OUTPUT);
+
+  // ledcAttach handles the output configuration and peripheral routing automatically.
+  ledcAttach(motorL_EN, freq, resolution);
+  ledcAttach(motorR_EN, freq, resolution);
+  ledcAttach(lights, lightsFreq, resolution);
+
+  // Keep currentToUSonic as OUTPUT but ensure it stays LOW for now
+  pinMode(currentToUSonic, OUTPUT);
+  digitalWrite(currentToUSonic, LOW);
+
+  // 2. FLAG THIS AS A BACKGROUND CHECK-IN
+  // Maintain standby mode state as true during the sync sequence
+  isStandbyActive = true;
+
+  // 3. PHASE 1: WAKE UP RF RADIO & CONNECT TO WI-FI FIRST
+  // Evaluates your SLEEP_DURATION_SEC variable to format the console log cleanly
+  if (SLEEP_DURATION_SEC % 60 == 0) {
+    dualPrintf("☀️ %llu-Minute Check-in: Waking up RF radio and searching for network...\n", SLEEP_DURATION_SEC / 60);
+  } else {
+    dualPrintf("☀️ %llu-Second Check-in: Waking up RF radio and searching for network...\n", SLEEP_DURATION_SEC);
+  }
+
+  WiFi.mode(WIFI_STA); // Turn the RF radio back on from the WIFI_OFF state
+  WiFi.begin(); // Uses the credentials safely cached in the ESP32's NVS flash slot
+
+  unsigned long wifiStart = millis();
+  const unsigned long wifiTimeout = 10000; // Max 10 seconds to link to router
+  bool wifiConnected = false;
+
+  while (millis() - wifiStart < wifiTimeout) {
+    network.handle(); // Keep OTA and background network stack ticking
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiConnected = true;
+      break;
+    }
+    delay(50); // Yield to prevent CPU thrashing
+  }
+
+  // 4. PHASE 2: EXPLICIT STATE PUMPING HANDSHAKE WITH BLYNK SERVER
+  bool serverConnected = false;
+
+  if (wifiConnected) {
+    // Crucial: Give the ESP32 network stack a brief moment to stabilize routing/IP tables
+    delay(200); 
+    dualPrintln("📡 Wi-Fi link established. Initiating Blynk cloud handshake...");
+    
+    // Signal Blynk's engine that we want to connect
+    Blynk.connect(); 
+    
+    unsigned long blynkStart = millis();
+    const unsigned long blynkTimeout = 6000; // 6-second window to authenticate
+    
+    // Actively pump the state machine until connected or timeout reached
+    while (millis() - blynkStart < blynkTimeout) {
+      Blynk.run();      // Forces Blynk to process its background socket connection here
+      network.handle(); // Keeps OTA and background tasks responsive
+      
+      if (Blynk.connected()) {
+        serverConnected = true;
+        break;
+      }
+      delay(50); // Yield to prevent CPU thrashing
+    }
+  }
+
+  // 5. IF SERVER IS UNREACHABLE, GO BACK TO SLEEP TO SAVE BATTERY
+  if (!serverConnected) {
+    dualPrintln("❌ Network or Blynk server unreachable. Re-entering power save mode...");
+    return; // Exit to main loop; safety gate will put it right back to sleep
+  }
+
+  dualPrintln("📡 Server linked. Pulling Standby Pin (V17) state...");
+
+  // 6. THE 3-SECOND PACKET SYNC WINDOW
+  // Give the server a clear window to return the value and trigger BLYNK_WRITE(V17)
+  // BLYNK_CONNECTED() automatically requests the sync on link. 
+  // We just spin here briefly to receive and process that specific packet.
+  unsigned long startSyncWait = millis();
+  while (millis() - startSyncWait < 3000) {
+    Blynk.run(); // This actively processes the incoming BLYNK_WRITE packet!
+    
+    // If the button was OFF, BLYNK_WRITE(V17) triggers the 'else' block, 
+    // which sets isStandbyActive to false. If that happens, we exit immediately!
+    if (!isStandbyActive) {
+      dualPrintln("🔓 Wake confirmation parsed successfully!");
+      return; 
+    }
+    delay(10);
+  }
+
+  // 7. DEFAULT FALLBACK
+  // If 3 seconds pass and isStandbyActive is STILL true, it means either:
+  // A) The switch is still HIGH (User wants it asleep)
+  // B) The sync packet dropped. Safety first: go back to sleep.
+  dualPrintln("🔒 Standby confirmation or sync timeout reached. Returning to sleep...");
 }
