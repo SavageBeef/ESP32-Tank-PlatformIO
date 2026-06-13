@@ -164,6 +164,19 @@ void setup()
 
   Serial.println("\nBlynk connected successfully!");
 
+  if (Blynk.connected()) {
+  Preferences prefs;
+  prefs.begin("tank_config", false); // Open namespace in read/write mode
+  // If creds don't exist in NVS yet, commit the fallbacks so they are saved permanently
+  if (!prefs.isKey("auth")) {
+    Serial.println("💾 First successful fallback connection. Committing Blynk credentials to NVS...");
+    prefs.putString("auth", blynk_auth);
+    prefs.putString("server", blynk_server);
+    prefs.putString("port", blynk_port);
+  }
+  prefs.end();
+  }
+
   // Pin Configuration Declarations
   pinMode(LED, OUTPUT);
   pinMode(motorL_Negative, OUTPUT);
@@ -230,19 +243,32 @@ void loop()
   if (millis() - lastWiFiCheck > wifiCheckInterval) {
     lastWiFiCheck = millis();
 
-    if (WiFi.status() != WL_CONNECTED) {
-      dualPrintln("WiFi connection lost! Initiating background reconnect...");
-      WiFi.begin(); 
-    } 
-    else if (WiFi.status() == WL_CONNECTED) {
-      int rssi = WiFi.RSSI();
-      // -78 dBm captures the weak zone right before packet loss and input lag begin
-      if (rssi < -78) {
-        dualPrintf("Signal too weak (%d dBm). Disconnecting to hunt for closer AP...\n", rssi);
-        ledcWrite(motorL_EN, noSpeed);
-        ledcWrite(motorR_EN, noSpeed);
-        WiFi.disconnect(false); 
-        WiFi.begin();           
+    // 💾 Always open preferences first to secure guaranteed credentials from NVS
+    Preferences prefs;
+    prefs.begin("tank_config", true); // Open in read-only mode
+    String targetSSID = prefs.getString("wifi_ssid", "");
+    String targetPSK  = prefs.getString("wifi_psk", "");
+    prefs.end();
+
+    if (targetSSID != "") {
+      if (WiFi.status() != WL_CONNECTED) {
+        dualPrintln("WiFi connection lost! Initiating background reconnect...");
+        network.connectToStrongestAP(targetSSID.c_str(), targetPSK.c_str()); 
+      } 
+      else {
+        int rssi = WiFi.RSSI();
+        // -78 dBm captures the weak zone right before packet loss and input lag begin
+        if (rssi < -78) {
+          dualPrintf("Signal too weak (%d dBm). Disconnecting to hunt for closer AP...\n", rssi);
+          // Stop motors for safety during brief roaming scan transition
+          ledcWrite(motorL_EN, noSpeed);
+          ledcWrite(motorR_EN, noSpeed);
+          // Drop connection cleanly
+          WiFi.disconnect(false); 
+          delay(100); // ⏱️ Give the radio task a moment to settle the state change
+          // Target the absolute best node using our guaranteed NVS strings
+          network.connectToStrongestAP(targetSSID.c_str(), targetPSK.c_str());           
+        }
       }
     }
   }

@@ -37,40 +37,42 @@ void NetworkHelper::begin(const char *baseName, const char *password)
   String savedPort = preferences.getString("port", "");
 
   // Use saved values if available, otherwise use Secret defaults
-  if (savedAuth != "")
-    savedAuth.toCharArray(blynk_auth, 34);
-  if (savedServer != "")
-    savedServer.toCharArray(blynk_server, 40);
-  if (savedPort != "")
-    savedPort.toCharArray(blynk_port, 6);
+  if (savedAuth != "") savedAuth.toCharArray(blynk_auth, 34);
+  if (savedServer != "") savedServer.toCharArray(blynk_server, 40);
+  if (savedPort != "") savedPort.toCharArray(blynk_port, 6);
 
   Serial.printf("Loaded Blynk Server: %s:%s\n", blynk_server, blynk_port);
   Serial.printf("Loaded Blynk Auth: %.4s...\n", blynk_auth);
-
   preferences.end();
 
   // --- 2. WiFi CONNECTION ATTEMPTS ---
   Serial.println("\n--- WiFi Connection Phase ---");
   Serial.println("Attempting to connect to saved Wi-Fi...");
 
+  // Open the exact same preference partition to fetch saved network name
+  preferences.begin("tank_config", false);
+  String savedSSID = preferences.getString("wifi_ssid", "");
+  String savedPSK  = preferences.getString("wifi_psk", "");
+  preferences.end();
+
   WiFi.mode(WIFI_STA);
   delay(100);
 
+  bool usedFallback = false;
+
   // If memory is completely empty (like a fresh flash), manually force the 
   // hardcoded ESP32_secrets.h credentials into the underlying Wi-Fi radio profile
-  if (WiFi.SSID() == "") {
+  if (savedSSID == "") {
     Serial.println("No saved Wi-Fi credentials found in flash memory.");
     Serial.printf("Preloading fallback credentials from ESP32_secrets.h: %s\n", Secret_SSID);
-    
     // This physically programs the radio profile with your hardcoded fallback secrets
     WiFi.begin(Secret_SSID, Secret_PASS);
+    usedFallback = true; // Set flag to securely commit these without using WiFi.psk()
     } 
   else {
-    Serial.print("Saved credentials found in flash. Attempting connection to: ");
-    Serial.println(WiFi.SSID());
-
-    // This tells the radio to run natively using whatever profile was saved last
-    WiFi.begin();
+    Serial.printf("Saved credentials found in flash. Attempting connection to: %s\n", savedSSID);
+    // This tells the radio to run using whatever profile was saved last to NVS and to choose the better node
+    connectToStrongestAP(savedSSID.c_str(), savedPSK.c_str()); 
   }
 
   // Give the hardware radio exactly 10 seconds to try connecting to the network profile
@@ -97,11 +99,23 @@ void NetworkHelper::begin(const char *baseName, const char *password)
       ESP.restart();
     }
   }
+  else {
+    Serial.println("\nWiFi connected!");
+    Serial.println("IP: " + WiFi.localIP().toString());
 
-  Serial.println("\nWiFi connected!");
-  Serial.println("IP: " + WiFi.localIP().toString());
+    // If we successfully linked using hardcoded fallbacks for the very first time, commit them now safely
+    if (usedFallback) {
+      preferences.begin("tank_config", false);
+      if (!preferences.isKey("wifi_ssid")) {
+        Serial.println("💾 First successful fallback connection. Committing hardcoded WiFi credentials to NVS...");
+        preferences.putString("wifi_ssid", Secret_SSID);
+        preferences.putString("wifi_psk", Secret_PASS); // Plaintext safety bypass
+      }
+      preferences.end();
+    }
+  }
 
-  // --- 3. NOW SETUP OTA AND WEBSERIAL (after WiFi is established) ---
+  // --- 4. NOW SETUP OTA AND WEBSERIAL (after WiFi is established) ---
   Serial.println("\n--- Initializing Services ---");
   Serial.println("Setting up Arduino OTA...");
   setupOTA();
@@ -217,17 +231,28 @@ void NetworkHelper::launchCombinedProvisioner()
   {
     Serial.println("\nPortal connection successful!");
 
+    // Fetch the newly configured WiFi credentials straight from WiFiManager memory
+    String provisionedSSID = wm.getWiFiSSID();
+    String provisionedPSK  = wm.getWiFiPass();
+
     // Get the Blynk server config (IP:PORT format)
     String blynkServerConfig = custom_blynk_server.getValue();
     String blynkAuthToken = custom_blynk_auth.getValue();
 
+    // Open NVS namespace once to commit everything uniformly
+    preferences.begin("tank_config", false);
+
+    if (provisionedSSID.length() > 0) {
+      Serial.printf("💾 Saving provisioned Wi-Fi to NVS: %s\n", provisionedSSID.c_str());
+      preferences.putString("wifi_ssid", provisionedSSID);
+      preferences.putString("wifi_psk", provisionedPSK);
+    }
+
     if (blynkServerConfig.length() > 0)
     {
       Serial.println("Parsing Blynk configuration...");
-
       // Parse server:port
       int colonPos = blynkServerConfig.indexOf(':');
-
       if (colonPos > 0)
       {
         String server = blynkServerConfig.substring(0, colonPos);
@@ -247,12 +272,9 @@ void NetworkHelper::launchCombinedProvisioner()
         port.toCharArray(blynk_port, 6);
         auth.toCharArray(blynk_auth, 34);
 
-        // Save to preferences
-        preferences.begin("tank_config", false);
         preferences.putString("server", server);
         preferences.putString("port", port);
         preferences.putString("auth", auth);
-        preferences.end();
       }
       else
       {
@@ -263,6 +285,7 @@ void NetworkHelper::launchCombinedProvisioner()
     {
       Serial.println("No Blynk config provided. Using defaults from secrets.");
     }
+    preferences.end();
   }
   else
   {
@@ -383,4 +406,52 @@ void NetworkHelper::launchBlynkProvisioner()
   // Restart the main WebSerial server
   Serial.println("Restarting WebSerial server...");
   _server.begin();
+}
+
+bool NetworkHelper::connectToStrongestAP(const char* targetSSID, const char* targetPass) {
+  Serial.println("🔍 Scanning for the strongest Access Point node...");
+  
+  // Perform a synchronous scan (can take 1-2 seconds, acceptable during a disconnect event)
+  int n = WiFi.scanNetworks(false, false, false, 300); // Fast scan channel window
+  if (n <= 0) {
+    Serial.println("❌ No networks found during scan.");
+    return false;
+  }
+
+  int bestRSSI = -999;
+  uint8_t bestBSSID[6];
+  int32_t bestChannel = 0;
+  bool foundAP = false;
+
+  // Iterate through all discovered nodes
+  for (int i = 0; i < n; ++i) {
+    if (WiFi.SSID(i) == targetSSID) {
+      int32_t currentRSSI = WiFi.RSSI(i);
+      Serial.printf("📡 Found AP Node: [%s] | BSSID: %s | RSSI: %d dBm | Ch: %d\n", 
+        WiFi.SSID(i).c_str(), WiFi.BSSIDstr(i).c_str(), currentRSSI, WiFi.channel(i));
+
+      // Track the absolute strongest signal matching your credentials
+      if (currentRSSI > bestRSSI) {
+        bestRSSI = currentRSSI;
+        bestChannel = WiFi.channel(i);
+        memcpy(bestBSSID, WiFi.BSSID(i), 6);
+        foundAP = true;
+      }
+    }
+  }
+
+  // Clear scan results from memory
+  WiFi.scanDelete();
+
+  if (foundAP) {
+    Serial.printf("🚀 Targeting Strongest Node -> BSSID: %02X:%02X:%02X:%02X:%02X:%02X | RSSI: %d dBm\n",
+      bestBSSID[0], bestBSSID[1], bestBSSID[2], bestBSSID[3], bestBSSID[4], bestBSSID[5], bestRSSI);
+    
+    // Force the ESP32-S3 to connect ONLY to this specific physical radio node
+    WiFi.begin(targetSSID, targetPass, bestChannel, bestBSSID);
+    return true;
+  }
+
+  Serial.println("⚠️ target SSID not explicitly identified in scan results.");
+  return false;
 }

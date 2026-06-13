@@ -36,6 +36,7 @@ public:
     // Add a way to access the server if other libs need it
     AsyncWebServer* getServer() { return &_server; }
     void launchBlynkProvisioner();
+    bool connectToStrongestAP(const char* targetSSID, const char* targetPass);
 
 private:
     AsyncWebServer _server;
