@@ -311,8 +311,8 @@ void NetworkHelper::launchBlynkProvisioner()
   delay(500);
 
   // Restart timer variables
-  bool shouldRestart = false;
-  unsigned long restartTimer = 0;
+  volatile bool shouldRestart = false;
+  volatile unsigned long restartTimer = 0;
 
   // Create soft AP for Blynk configuration
   WiFi.softAP(_blynkAPName.c_str(), _password.c_str());
