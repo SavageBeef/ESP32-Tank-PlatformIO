@@ -20,17 +20,27 @@ The project decouples hardware-specific code from core control logic, allowing t
 
 ## 🛡️ Key Features & Safety Guards
 
-### 1. Refactored Movement Logic (`TankDrive.cpp`)
+### 1. Advanced Drive Control & Safety Gates (`TankDrive.cpp`)
 The movement engine is a standalone module, enabling rigorous testing of the tank's behavior away from the physical chassis.
 * **State-Machine Control:** Explicitly tracks `STATE_FWD`, `STATE_BWD`, `STATE_STOP`, `STATE_HALTED`, and `STATE_GUARD`.
-* **Directional Lock Guard:** A hardware-safety feature that prevents motor drivers from instant polarity flips (e.g., Forward directly to Backward) without passing through a neutral zone, protecting the H-bridge and gearboxes.
-* **Obstacle Intelligence:** Automated `STATE_HALTED` transition triggered by real-time ultrasonic sensor feedback.
+* **Directional Lock Guard:** The driving engine features an automated safety gate that intercepts illegal directional flips (such as trying to go directly from full forward to full reverse), without passing through a neutral zone. Instead of stressing the hardware, it drops into a protective guard state (`STATE_GUARD`), shielding the motor drivers from massive current spikes and protecting the H-bridge and physical gearboxes from sudden reverse torque.
+* **Proximity Collision Avoidance:** Integrates real-time ultrasonic sensory data directly into the core drive logic. If an obstacle enters the danger zone, the system overrides user input and instantly shifts into a dedicated halt state (`STATE_HALTED`) to prevent physical impact.
+* **Precision Dead-Zone Mapping:** Features specialized joystick region handling to differentiate between subtle turning adjustments, sharp pivots, and deliberate neutral states, providing smooth and predictable handling.
 
 ### 2. Calibrated Battery Telemetry (`BatteryMath.h`)
-Utilizes a voltage divider formula with custom calibration constants. Features automatic percentage clamping (0–100%) to provide reliable telemetry to the control interface.
+* **Accurate Telemetry Scaling:** Utilizes a voltage divider formula with custom calibration constant to convert raw voltage divider inputs into precise real-time cell metrics. Features automatic percentage clamping (0–100%) to provide reliable telemetry to the control interface.
 
-### 3. Migrated Network Logic (`NetworkHelper.cpp`)
-The Captive Portal and other network-related code have been decoupled to simplify the [`main.cpp`](src/ESP32_WiFi_Tank.cpp) file. The main file handles the high-level execution order, while underlying libraries manage the implementation details.
+### 3. Smart Network & Provisioning Logic (`NetworkHelper.cpp`)
+The entire wireless management, portal handling, and background routing architecture is decoupled into a dedicated helper module:
+* **Dynamic Captive Portals:** If a connection fails, the tank opens its own secure localized hotspot (`Tank-Setup` or `Tank-Blynk-Setup`). This hosts an on-board configuration web form to update network parameters on the fly and cleanly reboots the hardware upon submission.
+* **Persistent Settings (No Hardcoding):** Integrates the native ESP32 `Preferences` storage layer to save Wi-Fi details, custom Blynk authentication tokens, and server IP ports directly to internal flash memory. Settings survive power cycles and updates without needing code modifications.
+* **Intelligent AP Roaming:** Instead of blindly connecting to the first matching router it discovers, the network stack actively scans the area to evaluate signal strengths (RSSI). It automatically identifies and binds to the absolute strongest access point node matching your credentials.
+
+### 4. Remote Power Saving & Light Sleep Cycle
+* **Dashboard Sleep Toggle:** Features a remote button toggle that allows you to instantly command the tank to drop into a low-power Light Sleep mode, suspending mechanical activity and reducing power draw.
+* **15-Minute Smart Wake Cycles:** While in standby, the tank automatically wakes up every 15 minutes to run a quick status audit, checking if it has been requested to resume normal operations before cleanly slipping back into a sleep state.
+* **Network Failsafe Protection:** If the tank wakes up during its scheduled cycle and finds that either the local Wi-Fi connection or the Blynk telemetry server is completely down, it immediately aborts all connection routines. Instead of wasting energy looping in the background searching for a signal, it drops right back into Light Sleep to preserve the battery.
+* **3-Second Boot Synchronization:** On every wake or connection cycle, the firmware maintains a temporary 3-second packet validation window. This allows the tank to pull down the state of its remote interface elements before activating high-power mechanical subsystems.
 
 ---
 
